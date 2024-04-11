@@ -435,7 +435,7 @@ namespace Source2Roblox.Geometry
                     if (bone.Parent == null)
                         bone.Parent = largestPart;
 
-                    bone.CFrame -= largestPart.Position;
+                    bone.CFrame -= largestPart.CFrame.Position;
                 }
             }
             else
@@ -497,7 +497,7 @@ namespace Source2Roblox.Geometry
                 if (bone.Parent is Bone parent)
                     continue;
 
-                bone.CFrame -= largestPart.Position;
+                bone.CFrame -= largestPart.CFrame.Position;
             }
 
             string exportPath = Path.Combine(rootWorkDir, modelDir, $"{modelName}.rbxm");
@@ -1173,7 +1173,7 @@ namespace Source2Roblox.Geometry
 
                 foreach (var part in model.GetDescendantsOfType<BasePart>())
                 {
-                    var position = part.Position;
+                    var position = part.CFrame.Position;
                     partTree.CreateNode(position, part);
                 }
             }
