@@ -3,12 +3,14 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
+using System.Threading.Tasks;
 
 using Source2Roblox.FileSystem;
 using Source2Roblox.Geometry.MeshTypes;
 using Source2Roblox.Models;
 using Source2Roblox.Octree;
 using Source2Roblox.Textures;
+using Source2Roblox.Upload;
 using Source2Roblox.World;
 using Source2Roblox.World.Types;
 
@@ -168,6 +170,7 @@ namespace Source2Roblox.Geometry
         {
             var modelPath = model.Location;
             var modelInfo = new FileInfo(modelPath);
+            var uploadPool = new List<Task>();
 
             var game = model.Game ?? Program.GameMount;
             var gameName = game.GameName;
@@ -180,7 +183,7 @@ namespace Source2Roblox.Geometry
             string rootWorkDir = Path.Combine(localAppData, "Roblox Studio", "content", "source", gameName);
 
             string rbxAssetDir = $"rbxasset://source/{gameName}";
-            var localAssetId = new Func<string, string>((localPath) => $"{rbxAssetDir}/{localPath}");
+            var assetManager = new AssetManager(rootWorkDir, rbxAssetDir);
 
             string modelDir = modelPath.Replace(modelInfo.Name, "");
             string meshDir = Path.Combine(modelDir, modelName);
@@ -363,23 +366,23 @@ namespace Source2Roblox.Geometry
                 var surface = new SurfaceAppearance() { AlphaMode = noAlpha ? AlphaMode.Overlay : AlphaMode.Transparency };
 
                 if (!string.IsNullOrEmpty(diffusePath))
-                    surface.ColorMap = localAssetId(diffusePath);
+                    assetManager.BindAssetId(diffusePath, uploadPool, surface, "ColorMap");
 
                 if (!string.IsNullOrEmpty(bumpPath))
-                    surface.NormalMap = localAssetId(bumpPath);
+                    assetManager.BindAssetId(bumpPath, uploadPool, surface, "NormalMap");
 
                 vmt.SaveVTF(ENV_DARK, rootWorkDir);
                 vmt.SaveVTF(ENV_LIGHT, rootWorkDir);
 
                 if (vmt.EnvMap)
                 {
-                    surface.RoughnessMap = localAssetId(ENV_DARK);
-                    surface.MetalnessMap = localAssetId(ENV_LIGHT);
+                    assetManager.BindAssetId(ENV_DARK, uploadPool, surface, "RoughnessMap");
+                    assetManager.BindAssetId(ENV_LIGHT, uploadPool, surface, "MetalnessMap");
                 }
                 else
                 {
-                    surface.MetalnessMap = localAssetId(ENV_DARK);
-                    surface.RoughnessMap = localAssetId(ENV_LIGHT);
+                    assetManager.BindAssetId(ENV_DARK, uploadPool, surface, "MetalnessMap");
+                    assetManager.BindAssetId(ENV_LIGHT, uploadPool, surface, "RoughnessMap");
                 }
 
                 surface.Parent = meshPart;
@@ -432,7 +435,7 @@ namespace Source2Roblox.Geometry
                     if (bone.Parent == null)
                         bone.Parent = largestPart;
 
-                    bone.CFrame -= largestPart.CFrame.Position;
+                    bone.CFrame -= largestPart.Position;
                 }
             }
             else
@@ -481,8 +484,11 @@ namespace Source2Roblox.Geometry
                     Console.WriteLine($"\tWrote {meshPath}");
                 }
 
-                meshPart.MeshId = localAssetId($"{meshDir}/{name}.mesh");
+                assetManager.BindAssetId($"{meshDir}/{name}.mesh", uploadPool, meshPart, "MeshId");
             }
+
+            var uploadTask = Task.WhenAll(uploadPool);
+            uploadTask.Wait();
 
             foreach (var bone in bones)
             {
@@ -491,7 +497,7 @@ namespace Source2Roblox.Geometry
                 if (bone.Parent is Bone parent)
                     continue;
 
-                bone.CFrame -= largestPart.CFrame.Position;
+                bone.CFrame -= largestPart.Position;
             }
 
             string exportPath = Path.Combine(rootWorkDir, modelDir, $"{modelName}.rbxm");
@@ -599,9 +605,9 @@ namespace Source2Roblox.Geometry
 
             string contentDir = Path.Combine(localAppData, "Roblox Studio", "content");
             string sourceDir = Path.Combine(contentDir, "source", gameName);
-
             string rbxAsset = $"rbxasset://source/{gameName}";
-            var localAssetId = new Func<string, string>((localPath) => $"{rbxAsset}/{localPath}");
+
+            var assetManager = new AssetManager(sourceDir, rbxAsset);
             var geometry = new WorldGeometry(bsp, sourceDir, game);
 
             string mapsDir = Path.Combine(sourceDir, "maps");
@@ -610,6 +616,7 @@ namespace Source2Roblox.Geometry
             Console.WriteLine("Writing Roblox files...");
             Directory.CreateDirectory(mapDir);
 
+            var uploadPool = new List<Task>();
             var map = new BinaryRobloxFile();
 
             var lighting = new Lighting()
@@ -680,15 +687,13 @@ namespace Source2Roblox.Geometry
                             continue;
 
                         string diffuse = material.DiffusePath;
-                        string propName = pair.Value.Name;
+                        string prop = pair.Value.Name;
 
                         if (string.IsNullOrEmpty(diffuse))
                             continue;
 
-                        var prop = sky.GetProperty(propName);
-                        prop.Value = localAssetId(diffuse);
-
                         material.SaveVTF(diffuse, sourceDir, true);
+                        assetManager.BindAssetId(diffuse, uploadPool, sky, prop);
                     }
 
                     sky.Parent = lighting;
@@ -930,7 +935,7 @@ namespace Source2Roblox.Geometry
                     if (meshPart.Parent == null)
                         meshPart.Parent = workspace;
 
-                    meshPart.MeshId = localAssetId($"maps/{mapName}/{meshName}");
+                    assetManager.BindAssetId($"maps/{mapName}/{meshName}", uploadPool, meshPart, "MeshId");
 
                     if (materialSets.TryGetValue(material, out var vmt))
                     {
@@ -988,13 +993,13 @@ namespace Source2Roblox.Geometry
                             }
 
                             vmt.SaveVTF(diffuse, sourceDir);
-                            surface.ColorMap = localAssetId(diffuse);
+                            assetManager.BindAssetId(diffuse, uploadPool, surface, "ColorMap");
                         }
                         
                         if (!string.IsNullOrEmpty(bump))
                         {
                             vmt.SaveVTF(bump, sourceDir, true);
-                            surface.NormalMap = localAssetId(bump);
+                            assetManager.BindAssetId(bump, uploadPool, surface, "NormalMap");
                         }
 
                         vmt.SaveVTF(ENV_DARK, sourceDir);
@@ -1002,13 +1007,13 @@ namespace Source2Roblox.Geometry
 
                         if (vmt.EnvMap)
                         {
-                            surface.RoughnessMap = localAssetId(ENV_DARK);
-                            surface.MetalnessMap = localAssetId(ENV_LIGHT);
+                            assetManager.BindAssetId(ENV_DARK, uploadPool, surface, "RoughnessMap");
+                            assetManager.BindAssetId(ENV_LIGHT, uploadPool, surface, "MetalnessMap");
                         }
                         else
                         {
-                            surface.MetalnessMap = localAssetId(ENV_DARK);
-                            surface.RoughnessMap = localAssetId(ENV_LIGHT);
+                            assetManager.BindAssetId(ENV_DARK, uploadPool, surface, "MetalnessMap");
+                            assetManager.BindAssetId(ENV_LIGHT, uploadPool, surface, "RoughnessMap");
                         }
 
                         meshPart.Material = vmt.Material;
@@ -1168,7 +1173,7 @@ namespace Source2Roblox.Geometry
 
                 foreach (var part in model.GetDescendantsOfType<BasePart>())
                 {
-                    var position = part.CFrame.Position;
+                    var position = part.Position;
                     partTree.CreateNode(position, part);
                 }
             }
@@ -1376,6 +1381,9 @@ namespace Source2Roblox.Geometry
                     }
                 }
             }
+
+            var uploadTask = Task.WhenAll(uploadPool);
+            uploadTask.Wait();
 
             string savePath = Path.Combine(mapsDir, bsp.Name + ".rbxl");
             map.Save(savePath);
